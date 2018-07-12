@@ -20,7 +20,7 @@ import (
 
 const (
   defaultInterval = 30
-  defaultPort = ":9292"
+  defaultPort = ":9296"
 )
 
 const rootDoc = `<html>
