@@ -2,25 +2,25 @@ package main
 
 import (
 	"flag"
-	"net/http"
 	"github.com/mitchellh/go-homedir"
+	"net/http"
 	"os"
 	"time"
 
-  "k8s.io/client-go/rest"
-	"k8s.io/client-go/kubernetes"
-	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	as_v1 "k8s.io/api/autoscaling/v1"
+	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/prometheus/common/log"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/common/log"
 )
 
 const (
-  defaultInterval = 30
-  defaultPort = ":9296"
+	defaultInterval = 30
+	defaultPort     = ":9296"
 )
 
 const rootDoc = `<html>
@@ -94,7 +94,7 @@ var (
 		labels,
 	)
 
-	 hpaMaxPodsNum = prometheus.NewGaugeVec(
+	hpaMaxPodsNum = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "hpa_max_pods_num",
 			Help: "Number of max pods by spec.",
@@ -130,11 +130,11 @@ var (
 func init() {
 	prometheus.MustRegister(hpaCurrentPodsNum)
 	prometheus.MustRegister(hpaDesiredPodsNum)
-  prometheus.MustRegister(hpaMinPodsNum)
-  prometheus.MustRegister(hpaMaxPodsNum)
-  prometheus.MustRegister(hpaCurrentCpuPercentage)
-  prometheus.MustRegister(hpaTargetCpuPercentage)
-  prometheus.MustRegister(hpaLastScaleSecond)
+	prometheus.MustRegister(hpaMinPodsNum)
+	prometheus.MustRegister(hpaMaxPodsNum)
+	prometheus.MustRegister(hpaCurrentCpuPercentage)
+	prometheus.MustRegister(hpaTargetCpuPercentage)
+	prometheus.MustRegister(hpaLastScaleSecond)
 }
 
 func getHpaList() ([]as_v1.HorizontalPodAutoscaler, error) {
@@ -144,41 +144,41 @@ func getHpaList() ([]as_v1.HorizontalPodAutoscaler, error) {
 
 func main() {
 	flag.Parse()
-  log.Info("start HPA exporter")
+	log.Info("start HPA exporter")
 
 	go func() {
 		for {
-      hpa, err := getHpaList()
-      if err != nil {
-        log.Errorln(err)
-        continue
-      }
-      for _, a := range hpa {
-        label := prometheus.Labels{
-          "hpa_name" : a.ObjectMeta.Name,
-        	"hpa_namespace" : a.ObjectMeta.Namespace,
-        	"ref_kind" : a.Spec.ScaleTargetRef.Kind,
-        	"ref_name" : a.Spec.ScaleTargetRef.Name,
-        	"ref_apiversion" : a.Spec.ScaleTargetRef.APIVersion,
-        }
-        hpaCurrentPodsNum.With(label).Set(float64(a.Status.CurrentReplicas))
-        hpaDesiredPodsNum.With(label).Set(float64(a.Status.DesiredReplicas))
-        hpaMinPodsNum.With(label).Set(float64(*a.Spec.MinReplicas))
-        hpaMaxPodsNum.With(label).Set(float64(a.Spec.MaxReplicas))
-        hpaCurrentCpuPercentage.With(label).Set(float64(*a.Status.CurrentCPUUtilizationPercentage))
-        hpaTargetCpuPercentage.With(label).Set(float64(*a.Spec.TargetCPUUtilizationPercentage))
-        hpaLastScaleSecond.With(label).Set(float64(a.Status.LastScaleTime.Unix()))
-      }
+			hpa, err := getHpaList()
+			if err != nil {
+				log.Errorln(err)
+				continue
+			}
+			for _, a := range hpa {
 				if a.Spec.MinReplicas == nil || a.Status.CurrentCPUUtilizationPercentage == nil || a.Spec.TargetCPUUtilizationPercentage == nil {
 					continue
 				}
+				label := prometheus.Labels{
+					"hpa_name":       a.ObjectMeta.Name,
+					"hpa_namespace":  a.ObjectMeta.Namespace,
+					"ref_kind":       a.Spec.ScaleTargetRef.Kind,
+					"ref_name":       a.Spec.ScaleTargetRef.Name,
+					"ref_apiversion": a.Spec.ScaleTargetRef.APIVersion,
+				}
+				hpaCurrentPodsNum.With(label).Set(float64(a.Status.CurrentReplicas))
+				hpaDesiredPodsNum.With(label).Set(float64(a.Status.DesiredReplicas))
+				hpaMinPodsNum.With(label).Set(float64(*a.Spec.MinReplicas))
+				hpaMaxPodsNum.With(label).Set(float64(a.Spec.MaxReplicas))
+				hpaCurrentCpuPercentage.With(label).Set(float64(*a.Status.CurrentCPUUtilizationPercentage))
+				hpaTargetCpuPercentage.With(label).Set(float64(*a.Spec.TargetCPUUtilizationPercentage))
+				hpaLastScaleSecond.With(label).Set(float64(a.Status.LastScaleTime.Unix()))
+			}
 			time.Sleep(time.Duration(*interval) * time.Second)
 		}
 	}()
 	http.Handle("/metrics", promhttp.Handler())
-  http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-    w.Write([]byte(rootDoc))
-  })
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(rootDoc))
+	})
 
-  log.Fatal(http.ListenAndServe(*addr, nil))
+	log.Fatal(http.ListenAndServe(*addr, nil))
 }
