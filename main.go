@@ -169,6 +169,9 @@ func main() {
         hpaTargetCpuPercentage.With(label).Set(float64(*a.Spec.TargetCPUUtilizationPercentage))
         hpaLastScaleSecond.With(label).Set(float64(a.Status.LastScaleTime.Unix()))
       }
+				if a.Spec.MinReplicas == nil || a.Status.CurrentCPUUtilizationPercentage == nil || a.Spec.TargetCPUUtilizationPercentage == nil {
+					continue
+				}
 			time.Sleep(time.Duration(*interval) * time.Second)
 		}
 	}()
