@@ -154,9 +154,6 @@ func main() {
 				continue
 			}
 			for _, a := range hpa {
-				if a.Spec.MinReplicas == nil || a.Status.CurrentCPUUtilizationPercentage == nil || a.Spec.TargetCPUUtilizationPercentage == nil {
-					continue
-				}
 				label := prometheus.Labels{
 					"hpa_name":       a.ObjectMeta.Name,
 					"hpa_namespace":  a.ObjectMeta.Namespace,
@@ -166,11 +163,19 @@ func main() {
 				}
 				hpaCurrentPodsNum.With(label).Set(float64(a.Status.CurrentReplicas))
 				hpaDesiredPodsNum.With(label).Set(float64(a.Status.DesiredReplicas))
-				hpaMinPodsNum.With(label).Set(float64(*a.Spec.MinReplicas))
+				if a.Spec.MinReplicas != nil {
+					hpaMinPodsNum.With(label).Set(float64(*a.Spec.MinReplicas))
+				}
 				hpaMaxPodsNum.With(label).Set(float64(a.Spec.MaxReplicas))
-				hpaCurrentCpuPercentage.With(label).Set(float64(*a.Status.CurrentCPUUtilizationPercentage))
-				hpaTargetCpuPercentage.With(label).Set(float64(*a.Spec.TargetCPUUtilizationPercentage))
-				hpaLastScaleSecond.With(label).Set(float64(a.Status.LastScaleTime.Unix()))
+				if a.Status.CurrentCPUUtilizationPercentage != nil {
+					hpaCurrentCpuPercentage.With(label).Set(float64(*a.Status.CurrentCPUUtilizationPercentage))
+				}
+				if a.Spec.TargetCPUUtilizationPercentage != nil {
+					hpaTargetCpuPercentage.With(label).Set(float64(*a.Spec.TargetCPUUtilizationPercentage))
+				}
+				if a.Status.LastScaleTime != nil {
+					hpaLastScaleSecond.With(label).Set(float64(a.Status.LastScaleTime.Unix()))
+				}
 			}
 			time.Sleep(time.Duration(*interval) * time.Second)
 		}
