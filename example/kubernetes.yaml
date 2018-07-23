@@ -1,0 +1,43 @@
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: hpa-exporter
+rules:
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["list"]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hpa-exporter
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: hpa-exporter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: hpa-exporter
+subjects:
+  - kind: ServiceAccount
+    name: hpa-exporter
+    namespace: default
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hpa-exporter
+  namespace: default
+  annotations:
+    prometheus.io/scrape: 'true'
+    prometheus.io/port: '9296'
+spec:
+  serviceAccountName: hpa-exporter
+  containers:
+    - image: masahata/hpa_exporter:latest
+      name: hpa-exporter
+      ports:
+        - containerPort: 9296
