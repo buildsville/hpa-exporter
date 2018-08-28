@@ -19,8 +19,10 @@ import (
 )
 
 const (
-	defaultInterval = 30
-	defaultPort     = ":9296"
+	defaultMetricsInterval = 30
+	defaultConditionLogging = true
+	defaultLoggingInterval = 60
+	defaultAddr     = ":9296"
 )
 
 const rootDoc = `<html>
@@ -32,8 +34,10 @@ const rootDoc = `<html>
 </html>
 `
 
-var addr = flag.String("listen-address", defaultPort, "The address to listen on for HTTP requests.")
-var interval = flag.Int("interval", defaultInterval, "Interval to scrape HPA status.")
+var addr = flag.String("listen-address", defaultAddr, "The address to listen on for HTTP requests.")
+var metricsInterval = flag.Int("metricsInterval", defaultMetricsInterval, "Interval to scrape HPA status.")
+var loggingInterval = flag.Int("loggingInterval", defaultLoggingInterval, "Interval to logging HPA conditions.")
+var conditionLogging = flag.Bool("conditionLogging", defaultConditionLogging, "Logging HPA conditions.")
 
 var kubeClient = func() kubernetes.Interface {
 	var ret kubernetes.Interface
@@ -146,6 +150,24 @@ func main() {
 	flag.Parse()
 	log.Info("start HPA exporter")
 
+	if *conditionLogging {
+		go func() {
+			for {
+				hpa, err := getHpaList()
+				if err != nil {
+					log.Errorln(err)
+					continue
+				}
+				for _, a := range hpa {
+					name := a.ObjectMeta.Name
+					logtext := a.ObjectMeta.Annotations["autoscaling.alpha.kubernetes.io/conditions"]
+					log.Infof("{\"name\":\"%s\",\"conditions\":%s}",name,logtext)
+				}
+				time.Sleep(time.Duration(*loggingInterval) * time.Second)
+			}
+		}()
+	}
+
 	go func() {
 		for {
 			hpa, err := getHpaList()
@@ -177,7 +199,7 @@ func main() {
 					hpaLastScaleSecond.With(label).Set(float64(a.Status.LastScaleTime.Unix()))
 				}
 			}
-			time.Sleep(time.Duration(*interval) * time.Second)
+			time.Sleep(time.Duration(*metricsInterval) * time.Second)
 		}
 	}()
 	http.Handle("/metrics", promhttp.Handler())
