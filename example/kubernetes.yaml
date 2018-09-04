@@ -37,7 +37,7 @@ metadata:
 spec:
   serviceAccountName: hpa-exporter
   containers:
-    - image: masahata/hpa_exporter:latest
+    - image: masahata/hpa-exporter:latest
       name: hpa-exporter
       ports:
         - containerPort: 9296

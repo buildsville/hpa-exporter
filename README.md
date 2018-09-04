@@ -1,4 +1,4 @@
-hpa_exporter
+hpa-exporter
 =====
 
 exporter for Kubernetes Horizontal Pod Autoscaler
