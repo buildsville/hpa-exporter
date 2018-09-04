@@ -1,7 +1,7 @@
 hpa-exporter
 =====
 
-exporter for Kubernetes Horizontal Pod Autoscaler
+prometheus exporter for Kubernetes Horizontal Pod Autoscaler
 
 default port 9296
 
