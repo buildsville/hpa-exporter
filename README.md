@@ -10,3 +10,6 @@ can see command line flags
 ```
 ./hpa-exporter -h
 ```
+
+docker image  
+https://hub.docker.com/r/masahata/hpa-exporter/
