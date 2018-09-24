@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"github.com/mitchellh/go-homedir"
 	"net/http"
 	"os"
@@ -19,11 +20,18 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/log"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
 )
 
 const (
 	defaultMetricsInterval  = 30
 	defaultConditionLogging = false
+	defaultLoggingTo        = "stdout"
+	defaultCWLogGroup       = "hpa-exporter"
+	defaultCWLogStream      = "condition-log"
 	defaultLoggingInterval  = 60
 	defaultAddr             = ":9296"
 )
@@ -63,6 +71,9 @@ var addr = flag.String("listen-address", defaultAddr, "The address to listen on 
 var metricsInterval = flag.Int("metricsInterval", defaultMetricsInterval, "Interval to scrape HPA status.")
 var loggingInterval = flag.Int("loggingInterval", defaultLoggingInterval, "Interval to logging HPA conditions.")
 var conditionLogging = flag.Bool("conditionLogging", defaultConditionLogging, "Logging HPA conditions.")
+var loggingTo = flag.String("loggingTo", defaultLoggingTo, "Where to log. (stdout or cwlogs)")
+var cwLogGroup = flag.String("cwLogGroup", defaultCWLogGroup, "Name of CWLog group.")
+var cwLogStream = flag.String("cwLogStream", defaultCWLogStream, "Name of CWLog stream.")
 
 var kubeClient = func() kubernetes.Interface {
 	var ret kubernetes.Interface
@@ -88,6 +99,13 @@ var kubeClient = func() kubernetes.Interface {
 		panic(err)
 	}
 	return ret
+}()
+
+var cwSession = func() *cloudwatchlogs.CloudWatchLogs {
+	sess := session.Must(session.NewSessionWithOptions(session.Options{
+		SharedConfigState: session.SharedConfigEnable,
+	}))
+	return cloudwatchlogs.New(sess)
 }()
 
 var labels = []string{
@@ -208,6 +226,13 @@ func init() {
 	prometheus.MustRegister(hpaScalingLimited)
 }
 
+func validateFlags() error {
+	if !(*loggingTo == "stdout" || *loggingTo == "cwlogs") {
+		return fmt.Errorf("invalid value `%s` of flag `loggingTo`, specify either `stdout` or `cwlogs`", *loggingTo)
+	}
+	return nil
+}
+
 func getHpaList() ([]as_v1.HorizontalPodAutoscaler, error) {
 	out, err := kubeClient.AutoscalingV1().HorizontalPodAutoscalers("").List(meta_v1.ListOptions{})
 	return out.Items, err
@@ -256,8 +281,99 @@ func makeAnnotationCondLabels(cond condition) (prometheus.Labels, prometheus.Lab
 	return labelForward, labelReverse
 }
 
+func putHPAConditionToCWLog(hpa []as_v1.HorizontalPodAutoscaler) error {
+	t, e := token()
+	if e != nil {
+		return e
+	}
+	cwevent := []*cloudwatchlogs.InputLogEvent{}
+	timestamp := aws.Int64(time.Now().Unix() * 1000)
+	for _, a := range hpa {
+		s := hpaConditionJsonString(a)
+		cwevent = append(cwevent, &cloudwatchlogs.InputLogEvent{
+			Message:   aws.String(s),
+			Timestamp: timestamp,
+		})
+	}
+	putEvent := &cloudwatchlogs.PutLogEventsInput{
+		LogEvents:     cwevent,
+		LogGroupName:  cwLogGroup,
+		LogStreamName: cwLogStream,
+		SequenceToken: t,
+	}
+	//return contains only token `ret["NextSequenceToken"]`
+	_, err := cwSession.PutLogEvents(putEvent)
+	return err
+}
+
+func hpaConditionJsonString(hpa as_v1.HorizontalPodAutoscaler) string {
+	condJsonStr := hpa.ObjectMeta.Annotations["autoscaling.alpha.kubernetes.io/conditions"]
+	return `{"name":"` + hpa.ObjectMeta.Name + `","conditions":` + condJsonStr + `}`
+}
+
+func token() (token *string, err error) {
+	input := &cloudwatchlogs.DescribeLogStreamsInput{
+		LogGroupName:        cwLogGroup,
+		LogStreamNamePrefix: cwLogStream,
+	}
+	x, err := cwSession.DescribeLogStreams(input)
+	if err == nil {
+		if len(x.LogStreams) == 0 {
+			err = createStream()
+		} else {
+			token = x.LogStreams[0].UploadSequenceToken
+		}
+	}
+	return
+}
+
+func checkLogGroup() error {
+	input := &cloudwatchlogs.DescribeLogGroupsInput{
+		LogGroupNamePrefix: cwLogGroup,
+	}
+	if r, e := cwSession.DescribeLogGroups(input); e == nil {
+		if len(r.LogGroups) == 0 {
+			if e := createLogGroup(); e != nil {
+				return e
+			}
+		}
+	} else {
+		return e
+	}
+	return nil
+}
+
+func createLogGroup() error {
+	input := &cloudwatchlogs.CreateLogGroupInput{
+		LogGroupName: cwLogGroup,
+	}
+	_, err := cwSession.CreateLogGroup(input)
+	return err
+}
+
+func createStream() error {
+	input := &cloudwatchlogs.CreateLogStreamInput{
+		LogGroupName:  cwLogGroup,
+		LogStreamName: cwLogStream,
+	}
+	_, err := cwSession.CreateLogStream(input)
+	return err
+}
+
 func main() {
 	flag.Parse()
+	e := validateFlags()
+	if e != nil {
+		panic(e)
+	}
+	time.Local, e = time.LoadLocation("Asia/Tokyo")
+	if e != nil {
+		time.Local = time.FixedZone("Asia/Tokyo", 9*60*60)
+	}
+	e = checkLogGroup()
+	if e != nil {
+		panic(e)
+	}
 	log.Info("start HPA exporter")
 
 	if *conditionLogging {
@@ -268,10 +384,14 @@ func main() {
 					log.Errorln(err)
 					continue
 				}
-				for _, a := range hpa {
-					name := a.ObjectMeta.Name
-					logtext := a.ObjectMeta.Annotations["autoscaling.alpha.kubernetes.io/conditions"]
-					log.Infof("{\"name\":\"%s\",\"conditions\":%s}", name, logtext)
+				if *loggingTo == "cwlogs" {
+					putHPAConditionToCWLog(hpa)
+				} else {
+					for _, a := range hpa {
+						name := a.ObjectMeta.Name
+						logtext := a.ObjectMeta.Annotations["autoscaling.alpha.kubernetes.io/conditions"]
+						log.Infof("{\"name\":\"%s\",\"conditions\":%s}", name, logtext)
+					}
 				}
 				time.Sleep(time.Duration(*loggingInterval) * time.Second)
 			}
