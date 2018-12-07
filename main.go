@@ -7,8 +7,6 @@ import (
 	"github.com/mitchellh/go-homedir"
 	"net/http"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	as_v1 "k8s.io/api/autoscaling/v1"
