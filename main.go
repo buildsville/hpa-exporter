@@ -12,6 +12,8 @@ import (
 	"time"
 
 	as_v1 "k8s.io/api/autoscaling/v1"
+	as_v2 "k8s.io/api/autoscaling/v2beta1"
+	core_v1 "k8s.io/api/core/v1"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -45,27 +47,17 @@ const rootDoc = `<html>
 </html>
 `
 
-type currentMetrics struct {
-	Type     string `json:"type"`
-	Resource struct {
-		Name                      string `json:"name"`
-		CurrentAverageUtilization int    `json:"currentAverageUtilization"`
-		CurrentAverageValue       string `json:"currentAverageValue"`
-	} `json:"resource"`
+type conditions struct {
+	Name       string                                   `json:"name"`
+	Conditions []as_v2.HorizontalPodAutoscalerCondition `json:"conditions"`
 }
 
-type condition struct {
-	Type               string    `json:"type"`
-	Status             string    `json:"status"`
-	LastTransitionTime time.Time `json:"lastTransitionTime"`
-	Reason             string    `json:"reason"`
-	Message            string    `json:"message"`
+type commonMetrics struct {
+	Kind       string
+	Name       string
+	MetricName string
+	Value      float64
 }
-
-const (
-	conditionStatusTrue  string = "True"
-	conditionStatusFalse string = "False"
-)
 
 var addr = flag.String("listen-address", defaultAddr, "The address to listen on for HTTP requests.")
 var metricsInterval = flag.Int("metricsInterval", defaultMetricsInterval, "Interval to scrape HPA status.")
@@ -108,12 +100,18 @@ var cwSession = func() *cloudwatchlogs.CloudWatchLogs {
 	return cloudwatchlogs.New(sess)
 }()
 
-var labels = []string{
+var baseLabels = []string{
 	"hpa_name",
 	"hpa_namespace",
 	"ref_kind",
 	"ref_name",
 	"ref_apiversion",
+}
+
+var metricLabels = []string{
+	"metric_kind",
+	"metric_name",
+	"metric_metricname",
 }
 
 var annoLabels = []string{
@@ -128,7 +126,7 @@ var (
 			Name: "hpa_current_pods_num",
 			Help: "Number of current pods by status.",
 		},
-		labels,
+		baseLabels,
 	)
 
 	hpaDesiredPodsNum = prometheus.NewGaugeVec(
@@ -136,7 +134,7 @@ var (
 			Name: "hpa_desired_pods_num",
 			Help: "Number of desired pods by status.",
 		},
-		labels,
+		baseLabels,
 	)
 
 	hpaMinPodsNum = prometheus.NewGaugeVec(
@@ -144,7 +142,7 @@ var (
 			Name: "hpa_min_pods_num",
 			Help: "Number of min pods by spec.",
 		},
-		labels,
+		baseLabels,
 	)
 
 	hpaMaxPodsNum = prometheus.NewGaugeVec(
@@ -152,31 +150,7 @@ var (
 			Name: "hpa_max_pods_num",
 			Help: "Number of max pods by spec.",
 		},
-		labels,
-	)
-
-	hpaCurrentCpuValue = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "hpa_current_cpu_value",
-			Help: "Current cpu usage value.",
-		},
-		labels,
-	)
-
-	hpaCurrentCpuPercentage = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "hpa_current_cpu_percentage",
-			Help: "Current cpu utilization calculated by HPA.",
-		},
-		labels,
-	)
-
-	hpaTargetCpuPercentage = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "hpa_target_cpu_percentage",
-			Help: "Target CPU utilization set for HPA.",
-		},
-		labels,
+		baseLabels,
 	)
 
 	hpaLastScaleSecond = prometheus.NewGaugeVec(
@@ -184,7 +158,71 @@ var (
 			Name: "hpa_last_scale_second",
 			Help: "Time the scale was last executed.",
 		},
-		labels,
+		baseLabels,
+	)
+
+	hpaCurrentResourceValue = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "hpa_current_resource_value",
+			Help: "Current Resource Value.",
+		},
+		append(baseLabels, metricLabels...),
+	)
+
+	hpaCurrentPodsValue = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "hpa_current_pods_value",
+			Help: "Current Pods Value.",
+		},
+		append(baseLabels, metricLabels...),
+	)
+
+	hpaCurrentObjectValue = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "hpa_current_object_value",
+			Help: "Current Object Value.",
+		},
+		append(baseLabels, metricLabels...),
+	)
+
+	hpaCurrentExternalValue = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "hpa_current_external_value",
+			Help: "Current Resource Value.",
+		},
+		append(baseLabels, metricLabels...),
+	)
+
+	hpaTargetResourceValue = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "hpa_target_resource_value",
+			Help: "Target Resource Value.",
+		},
+		append(baseLabels, metricLabels...),
+	)
+
+	hpaTargetPodsValue = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "hpa_target_pods_value",
+			Help: "Target Pods Value.",
+		},
+		append(baseLabels, metricLabels...),
+	)
+
+	hpaTargetObjectValue = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "hpa_target_object_value",
+			Help: "Target Object Value.",
+		},
+		append(baseLabels, metricLabels...),
+	)
+
+	hpaTargetExternalValue = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "hpa_target_external_value",
+			Help: "Target Resource Value.",
+		},
+		append(baseLabels, metricLabels...),
 	)
 
 	hpaAbleToScale = prometheus.NewGaugeVec(
@@ -192,7 +230,7 @@ var (
 			Name: "hpa_able_to_scale",
 			Help: "status able to scale from annotation.",
 		},
-		append(labels, annoLabels...),
+		append(baseLabels, annoLabels...),
 	)
 
 	hpaScalingActive = prometheus.NewGaugeVec(
@@ -200,7 +238,7 @@ var (
 			Name: "hpa_scaling_active",
 			Help: "status scaling active from annotation.",
 		},
-		append(labels, annoLabels...),
+		append(baseLabels, annoLabels...),
 	)
 
 	hpaScalingLimited = prometheus.NewGaugeVec(
@@ -208,7 +246,7 @@ var (
 			Name: "hpa_scaling_limited",
 			Help: "status scaling limited from annotation.",
 		},
-		append(labels, annoLabels...),
+		append(baseLabels, annoLabels...),
 	)
 )
 
@@ -217,10 +255,15 @@ func init() {
 	prometheus.MustRegister(hpaDesiredPodsNum)
 	prometheus.MustRegister(hpaMinPodsNum)
 	prometheus.MustRegister(hpaMaxPodsNum)
-	prometheus.MustRegister(hpaCurrentCpuValue)
-	prometheus.MustRegister(hpaCurrentCpuPercentage)
-	prometheus.MustRegister(hpaTargetCpuPercentage)
 	prometheus.MustRegister(hpaLastScaleSecond)
+	prometheus.MustRegister(hpaCurrentResourceValue)
+	prometheus.MustRegister(hpaCurrentPodsValue)
+	prometheus.MustRegister(hpaCurrentObjectValue)
+	prometheus.MustRegister(hpaCurrentExternalValue)
+	prometheus.MustRegister(hpaTargetResourceValue)
+	prometheus.MustRegister(hpaTargetPodsValue)
+	prometheus.MustRegister(hpaTargetObjectValue)
+	prometheus.MustRegister(hpaTargetExternalValue)
 	prometheus.MustRegister(hpaAbleToScale)
 	prometheus.MustRegister(hpaScalingActive)
 	prometheus.MustRegister(hpaScalingLimited)
@@ -238,14 +281,9 @@ func getHpaList() ([]as_v1.HorizontalPodAutoscaler, error) {
 	return out.Items, err
 }
 
-func currentAverageCpuValue(metrics currentMetrics) int {
-	val := strings.Trim(metrics.Resource.CurrentAverageValue, "m")
-	if i, e := strconv.ParseInt(val, 10, 64); e == nil {
-		return int(i)
-	} else {
-		log.Errorln(e)
-		return 0
-	}
+func getHpaListV2() ([]as_v2.HorizontalPodAutoscaler, error) {
+	out, err := kubeClient.AutoscalingV2beta1().HorizontalPodAutoscalers("").List(meta_v1.ListOptions{})
+	return out.Items, err
 }
 
 func mergeLabels(m1, m2 map[string]string) map[string]string {
@@ -260,17 +298,17 @@ func mergeLabels(m1, m2 map[string]string) map[string]string {
 	return (ans)
 }
 
-func makeAnnotationCondLabels(cond condition) (prometheus.Labels, prometheus.Labels) {
+func makeAnnotationCondLabels(cond as_v2.HorizontalPodAutoscalerCondition) (prometheus.Labels, prometheus.Labels) {
 	labelForward := prometheus.Labels{
-		"cond_status":  cond.Status,
+		"cond_status":  fmt.Sprintf("%v", cond.Status),
 		"cond_reason":  cond.Reason,
 		"cond_message": cond.Message,
 	}
 	var statusReverse string
-	if cond.Status == conditionStatusTrue {
-		statusReverse = conditionStatusFalse
+	if cond.Status == core_v1.ConditionTrue {
+		statusReverse = fmt.Sprintf("%v", core_v1.ConditionFalse)
 	} else {
-		statusReverse = conditionStatusTrue
+		statusReverse = fmt.Sprintf("%v", core_v1.ConditionTrue)
 	}
 	labelReverse := prometheus.Labels{
 		"cond_status":  statusReverse,
@@ -281,7 +319,111 @@ func makeAnnotationCondLabels(cond condition) (prometheus.Labels, prometheus.Lab
 	return labelForward, labelReverse
 }
 
-func putHPAConditionToCWLog(hpa []as_v1.HorizontalPodAutoscaler) error {
+func parseObjectSpec(m *as_v2.ObjectMetricSource) commonMetrics {
+	return commonMetrics{
+		Kind:       m.Target.Kind,
+		Name:       m.Target.Name,
+		MetricName: m.MetricName,
+		Value:      float64(m.TargetValue.MilliValue()) / 1000,
+	}
+}
+
+func parsePodsSpec(m *as_v2.PodsMetricSource) commonMetrics {
+	return commonMetrics{
+		Kind:       "Pod",
+		Name:       "-",
+		MetricName: m.MetricName,
+		Value:      float64(m.TargetAverageValue.MilliValue()) / 1000,
+	}
+}
+
+func parseResourceSpec(m *as_v2.ResourceMetricSource) commonMetrics {
+	var t float64
+	if m.TargetAverageUtilization == nil {
+		t = float64(m.TargetAverageValue.MilliValue()) / 1000
+	} else {
+		t = float64(*m.TargetAverageUtilization)
+	}
+	return commonMetrics{
+		Kind:       "Resource",
+		Name:       m.Name.String(),
+		MetricName: "-",
+		Value:      t,
+	}
+}
+
+func parseExternalSpec(m *as_v2.ExternalMetricSource) commonMetrics {
+	var t float64
+	if m.TargetAverageValue == nil {
+		t = float64(m.TargetValue.MilliValue()) / 1000
+	} else {
+		t = float64(m.TargetAverageValue.MilliValue()) / 1000
+	}
+	return commonMetrics{
+		Kind:       "External",
+		Name:       "-",
+		MetricName: m.MetricName,
+		Value:      t,
+	}
+}
+
+func parseObjectStatus(m *as_v2.ObjectMetricStatus) commonMetrics {
+	return commonMetrics{
+		Kind:       m.Target.Kind,
+		Name:       m.Target.Name,
+		MetricName: m.MetricName,
+		Value:      float64(m.CurrentValue.MilliValue()) / 1000,
+	}
+}
+
+func parsePodsStatus(m *as_v2.PodsMetricStatus) commonMetrics {
+	return commonMetrics{
+		Kind:       "Pod",
+		Name:       "-",
+		MetricName: m.MetricName,
+		Value:      float64(m.CurrentAverageValue.MilliValue()) / 1000,
+	}
+}
+
+func parseResourceStatus(m *as_v2.ResourceMetricStatus) commonMetrics {
+	var t float64
+	if m.CurrentAverageUtilization == nil {
+		t = float64(m.CurrentAverageValue.MilliValue()) / 1000
+	} else {
+		t = float64(*m.CurrentAverageUtilization)
+	}
+	return commonMetrics{
+		Kind:       "Resource",
+		Name:       m.Name.String(),
+		MetricName: "-",
+		Value:      t,
+	}
+}
+
+func parseExternalStatus(m *as_v2.ExternalMetricStatus) commonMetrics {
+	var t float64
+	if m.CurrentAverageValue == nil {
+		t = float64(m.CurrentValue.MilliValue()) / 1000
+	} else {
+		t = float64(m.CurrentAverageValue.MilliValue()) / 1000
+	}
+	return commonMetrics{
+		Kind:       "External",
+		Name:       "-",
+		MetricName: m.MetricName,
+		Value:      t,
+	}
+}
+
+func parseCommonMetrics(m commonMetrics) (float64, prometheus.Labels) {
+	return m.Value, prometheus.Labels{
+		"metric_kind":       m.Kind,
+		"metric_name":       m.Name,
+		"metric_metricname": m.MetricName,
+	}
+}
+
+func putHPAConditionToCWLog(hpa []as_v2.HorizontalPodAutoscaler) error {
 	t, e := token()
 	if e != nil {
 		return e
@@ -306,9 +448,17 @@ func putHPAConditionToCWLog(hpa []as_v1.HorizontalPodAutoscaler) error {
 	return err
 }
 
-func hpaConditionJsonString(hpa as_v1.HorizontalPodAutoscaler) string {
-	condJsonStr := hpa.ObjectMeta.Annotations["autoscaling.alpha.kubernetes.io/conditions"]
-	return `{"name":"` + hpa.ObjectMeta.Name + `","conditions":` + condJsonStr + `}`
+func hpaConditionJsonString(hpa as_v2.HorizontalPodAutoscaler) string {
+	cond := conditions{
+		Name:       hpa.ObjectMeta.Name,
+		Conditions: hpa.Status.Conditions,
+	}
+	jsonBytes, err := json.Marshal(cond)
+	if err != nil {
+		fmt.Println("JSON Marshal error:", err)
+		return "{}"
+	}
+	return string(jsonBytes)
 }
 
 func token() (token *string, err error) {
@@ -379,7 +529,7 @@ func main() {
 	if *conditionLogging {
 		go func() {
 			for {
-				hpa, err := getHpaList()
+				hpa, err := getHpaListV2()
 				if err != nil {
 					log.Errorln(err)
 					continue
@@ -388,9 +538,7 @@ func main() {
 					putHPAConditionToCWLog(hpa)
 				} else {
 					for _, a := range hpa {
-						name := a.ObjectMeta.Name
-						logtext := a.ObjectMeta.Annotations["autoscaling.alpha.kubernetes.io/conditions"]
-						log.Infof("{\"name\":\"%s\",\"conditions\":%s}", name, logtext)
+						log.Infoln(hpaConditionJsonString(a))
 					}
 				}
 				time.Sleep(time.Duration(*loggingInterval) * time.Second)
@@ -408,13 +556,13 @@ func main() {
 			annoLabelScalingLimitedRev = map[string]prometheus.Labels{}
 		)
 		for {
-			hpa, err := getHpaList()
+			hpa, err := getHpaListV2()
 			if err != nil {
 				log.Errorln(err)
 				continue
 			}
 			for _, a := range hpa {
-				label := prometheus.Labels{
+				baseLabel := prometheus.Labels{
 					"hpa_name":       a.ObjectMeta.Name,
 					"hpa_namespace":  a.ObjectMeta.Namespace,
 					"ref_kind":       a.Spec.ScaleTargetRef.Kind,
@@ -422,76 +570,95 @@ func main() {
 					"ref_apiversion": a.Spec.ScaleTargetRef.APIVersion,
 				}
 
-				metrJsonStr := a.ObjectMeta.Annotations["autoscaling.alpha.kubernetes.io/current-metrics"]
-				condJsonStr := a.ObjectMeta.Annotations["autoscaling.alpha.kubernetes.io/conditions"]
-				var metrics []currentMetrics
-				var conditions []condition
-				if e := json.Unmarshal([]byte(metrJsonStr), &metrics); e != nil {
-					log.Errorln(e)
-					continue
-				}
-				if e := json.Unmarshal([]byte(condJsonStr), &conditions); e != nil {
-					log.Errorln(e)
-					continue
-				}
-
-				var cpuVal int
-				if len(metrics) != 0 {
-					cpuVal = currentAverageCpuValue(metrics[0])
-				} else {
-					cpuVal = 0
-				}
-
-				hpaCurrentPodsNum.With(label).Set(float64(a.Status.CurrentReplicas))
-				hpaDesiredPodsNum.With(label).Set(float64(a.Status.DesiredReplicas))
+				hpaCurrentPodsNum.With(baseLabel).Set(float64(a.Status.CurrentReplicas))
+				hpaDesiredPodsNum.With(baseLabel).Set(float64(a.Status.DesiredReplicas))
 				if a.Spec.MinReplicas != nil {
-					hpaMinPodsNum.With(label).Set(float64(*a.Spec.MinReplicas))
+					hpaMinPodsNum.With(baseLabel).Set(float64(*a.Spec.MinReplicas))
 				}
-				hpaMaxPodsNum.With(label).Set(float64(a.Spec.MaxReplicas))
-				hpaCurrentCpuValue.With(label).Set(float64(cpuVal))
-				if a.Status.CurrentCPUUtilizationPercentage != nil {
-					hpaCurrentCpuPercentage.With(label).Set(float64(*a.Status.CurrentCPUUtilizationPercentage))
-				}
-				if a.Spec.TargetCPUUtilizationPercentage != nil {
-					hpaTargetCpuPercentage.With(label).Set(float64(*a.Spec.TargetCPUUtilizationPercentage))
-				}
+				hpaMaxPodsNum.With(baseLabel).Set(float64(a.Spec.MaxReplicas))
 				if a.Status.LastScaleTime != nil {
-					hpaLastScaleSecond.With(label).Set(float64(a.Status.LastScaleTime.Unix()))
+					hpaLastScaleSecond.With(baseLabel).Set(float64(a.Status.LastScaleTime.Unix()))
+				}
+
+				for _, metric := range a.Spec.Metrics {
+					switch metric.Type {
+					case as_v2.ObjectMetricSourceType:
+						m := parseObjectSpec(metric.Object)
+						v, l := parseCommonMetrics(m)
+						hpaTargetObjectValue.With(mergeLabels(baseLabel, l)).Set(v)
+					case as_v2.PodsMetricSourceType:
+						m := parsePodsSpec(metric.Pods)
+						v, l := parseCommonMetrics(m)
+						hpaTargetPodsValue.With(mergeLabels(baseLabel, l)).Set(v)
+					case as_v2.ResourceMetricSourceType:
+						m := parseResourceSpec(metric.Resource)
+						v, l := parseCommonMetrics(m)
+						hpaTargetResourceValue.With(mergeLabels(baseLabel, l)).Set(v)
+					case as_v2.ExternalMetricSourceType:
+						m := parseExternalSpec(metric.External)
+						v, l := parseCommonMetrics(m)
+						hpaTargetExternalValue.With(mergeLabels(baseLabel, l)).Set(v)
+					default:
+						continue
+					}
+				}
+
+				for _, metric := range a.Status.CurrentMetrics {
+					switch metric.Type {
+					case as_v2.ObjectMetricSourceType:
+						m := parseObjectStatus(metric.Object)
+						v, l := parseCommonMetrics(m)
+						hpaCurrentObjectValue.With(mergeLabels(baseLabel, l)).Set(v)
+					case as_v2.PodsMetricSourceType:
+						m := parsePodsStatus(metric.Pods)
+						v, l := parseCommonMetrics(m)
+						hpaCurrentPodsValue.With(mergeLabels(baseLabel, l)).Set(v)
+					case as_v2.ResourceMetricSourceType:
+						m := parseResourceStatus(metric.Resource)
+						v, l := parseCommonMetrics(m)
+						hpaCurrentResourceValue.With(mergeLabels(baseLabel, l)).Set(v)
+					case as_v2.ExternalMetricSourceType:
+						m := parseExternalStatus(metric.External)
+						v, l := parseCommonMetrics(m)
+						hpaCurrentExternalValue.With(mergeLabels(baseLabel, l)).Set(v)
+					default:
+						continue
+					}
 				}
 
 				name := a.ObjectMeta.Name
-				for _, cond := range conditions {
+				for _, cond := range a.Status.Conditions {
 					switch cond.Type {
-					case "AbleToScale":
+					case as_v2.AbleToScale:
 						oldLabel := annoLabelAbleToScale[name]
 						oldLabelRev := annoLabelAbleToScaleRev[name]
 
 						annoLabelAbleToScale[name], annoLabelAbleToScaleRev[name] = makeAnnotationCondLabels(cond)
 
-						_ = hpaAbleToScale.Delete(mergeLabels(label, oldLabel))
-						_ = hpaAbleToScale.Delete(mergeLabels(label, oldLabelRev))
-						hpaAbleToScale.With(mergeLabels(label, annoLabelAbleToScale[name])).Set(float64(1))
-						hpaAbleToScale.With(mergeLabels(label, annoLabelAbleToScaleRev[name])).Set(float64(0))
-					case "ScalingActive":
+						_ = hpaAbleToScale.Delete(mergeLabels(baseLabel, oldLabel))
+						_ = hpaAbleToScale.Delete(mergeLabels(baseLabel, oldLabelRev))
+						hpaAbleToScale.With(mergeLabels(baseLabel, annoLabelAbleToScale[name])).Set(float64(1))
+						hpaAbleToScale.With(mergeLabels(baseLabel, annoLabelAbleToScaleRev[name])).Set(float64(0))
+					case as_v2.ScalingActive:
 						oldLabel := annoLabelScalingActive[name]
 						oldLabelRev := annoLabelScalingActiveRev[name]
 
 						annoLabelScalingActive[name], annoLabelScalingActiveRev[name] = makeAnnotationCondLabels(cond)
 
-						_ = hpaScalingActive.Delete(mergeLabels(label, oldLabel))
-						_ = hpaScalingActive.Delete(mergeLabels(label, oldLabelRev))
-						hpaScalingActive.With(mergeLabels(label, annoLabelScalingActive[name])).Set(float64(1))
-						hpaScalingActive.With(mergeLabels(label, annoLabelScalingActiveRev[name])).Set(float64(0))
-					case "ScalingLimited":
+						_ = hpaScalingActive.Delete(mergeLabels(baseLabel, oldLabel))
+						_ = hpaScalingActive.Delete(mergeLabels(baseLabel, oldLabelRev))
+						hpaScalingActive.With(mergeLabels(baseLabel, annoLabelScalingActive[name])).Set(float64(1))
+						hpaScalingActive.With(mergeLabels(baseLabel, annoLabelScalingActiveRev[name])).Set(float64(0))
+					case as_v2.ScalingLimited:
 						oldLabel := annoLabelScalingLimited[name]
 						oldLabelRev := annoLabelScalingLimitedRev[name]
 
 						annoLabelScalingLimited[name], annoLabelScalingLimitedRev[name] = makeAnnotationCondLabels(cond)
 
-						_ = hpaScalingLimited.Delete(mergeLabels(label, oldLabel))
-						_ = hpaScalingLimited.Delete(mergeLabels(label, oldLabelRev))
-						hpaScalingLimited.With(mergeLabels(label, annoLabelScalingLimited[name])).Set(float64(1))
-						hpaScalingLimited.With(mergeLabels(label, annoLabelScalingLimitedRev[name])).Set(float64(0))
+						_ = hpaScalingLimited.Delete(mergeLabels(baseLabel, oldLabel))
+						_ = hpaScalingLimited.Delete(mergeLabels(baseLabel, oldLabelRev))
+						hpaScalingLimited.With(mergeLabels(baseLabel, annoLabelScalingLimited[name])).Set(float64(1))
+						hpaScalingLimited.With(mergeLabels(baseLabel, annoLabelScalingLimitedRev[name])).Set(float64(0))
 					}
 				}
 			}
