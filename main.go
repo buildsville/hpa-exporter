@@ -159,66 +159,18 @@ var (
 		baseLabels,
 	)
 
-	hpaCurrentResourceValue = prometheus.NewGaugeVec(
+	hpaCurrentMetricsValue = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "hpa_current_resource_value",
-			Help: "Current Resource Value.",
+			Name: "hpa_current_metrics_value",
+			Help: "Current Metrics Value.",
 		},
 		append(baseLabels, metricLabels...),
 	)
 
-	hpaCurrentPodsValue = prometheus.NewGaugeVec(
+	hpaTargetMetricsValue = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "hpa_current_pods_value",
-			Help: "Current Pods Value.",
-		},
-		append(baseLabels, metricLabels...),
-	)
-
-	hpaCurrentObjectValue = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "hpa_current_object_value",
-			Help: "Current Object Value.",
-		},
-		append(baseLabels, metricLabels...),
-	)
-
-	hpaCurrentExternalValue = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "hpa_current_external_value",
-			Help: "Current Resource Value.",
-		},
-		append(baseLabels, metricLabels...),
-	)
-
-	hpaTargetResourceValue = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "hpa_target_resource_value",
-			Help: "Target Resource Value.",
-		},
-		append(baseLabels, metricLabels...),
-	)
-
-	hpaTargetPodsValue = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "hpa_target_pods_value",
-			Help: "Target Pods Value.",
-		},
-		append(baseLabels, metricLabels...),
-	)
-
-	hpaTargetObjectValue = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "hpa_target_object_value",
-			Help: "Target Object Value.",
-		},
-		append(baseLabels, metricLabels...),
-	)
-
-	hpaTargetExternalValue = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "hpa_target_external_value",
-			Help: "Target Resource Value.",
+			Name: "hpa_target_metrics_value",
+			Help: "Target Metrics Value.",
 		},
 		append(baseLabels, metricLabels...),
 	)
@@ -254,14 +206,8 @@ func init() {
 	prometheus.MustRegister(hpaMinPodsNum)
 	prometheus.MustRegister(hpaMaxPodsNum)
 	prometheus.MustRegister(hpaLastScaleSecond)
-	prometheus.MustRegister(hpaCurrentResourceValue)
-	prometheus.MustRegister(hpaCurrentPodsValue)
-	prometheus.MustRegister(hpaCurrentObjectValue)
-	prometheus.MustRegister(hpaCurrentExternalValue)
-	prometheus.MustRegister(hpaTargetResourceValue)
-	prometheus.MustRegister(hpaTargetPodsValue)
-	prometheus.MustRegister(hpaTargetObjectValue)
-	prometheus.MustRegister(hpaTargetExternalValue)
+	prometheus.MustRegister(hpaCurrentMetricsValue)
+	prometheus.MustRegister(hpaTargetMetricsValue)
 	prometheus.MustRegister(hpaAbleToScale)
 	prometheus.MustRegister(hpaScalingActive)
 	prometheus.MustRegister(hpaScalingLimited)
@@ -583,19 +529,19 @@ func main() {
 					case as_v2.ObjectMetricSourceType:
 						m := parseObjectSpec(metric.Object)
 						v, l := parseCommonMetrics(m)
-						hpaTargetObjectValue.With(mergeLabels(baseLabel, l)).Set(v)
+						hpaTargetMetricsValue.With(mergeLabels(baseLabel, l)).Set(v)
 					case as_v2.PodsMetricSourceType:
 						m := parsePodsSpec(metric.Pods)
 						v, l := parseCommonMetrics(m)
-						hpaTargetPodsValue.With(mergeLabels(baseLabel, l)).Set(v)
+						hpaTargetMetricsValue.With(mergeLabels(baseLabel, l)).Set(v)
 					case as_v2.ResourceMetricSourceType:
 						m := parseResourceSpec(metric.Resource)
 						v, l := parseCommonMetrics(m)
-						hpaTargetResourceValue.With(mergeLabels(baseLabel, l)).Set(v)
+						hpaTargetMetricsValue.With(mergeLabels(baseLabel, l)).Set(v)
 					case as_v2.ExternalMetricSourceType:
 						m := parseExternalSpec(metric.External)
 						v, l := parseCommonMetrics(m)
-						hpaTargetExternalValue.With(mergeLabels(baseLabel, l)).Set(v)
+						hpaTargetMetricsValue.With(mergeLabels(baseLabel, l)).Set(v)
 					default:
 						continue
 					}
@@ -606,19 +552,19 @@ func main() {
 					case as_v2.ObjectMetricSourceType:
 						m := parseObjectStatus(metric.Object)
 						v, l := parseCommonMetrics(m)
-						hpaCurrentObjectValue.With(mergeLabels(baseLabel, l)).Set(v)
+						hpaCurrentMetricsValue.With(mergeLabels(baseLabel, l)).Set(v)
 					case as_v2.PodsMetricSourceType:
 						m := parsePodsStatus(metric.Pods)
 						v, l := parseCommonMetrics(m)
-						hpaCurrentPodsValue.With(mergeLabels(baseLabel, l)).Set(v)
+						hpaCurrentMetricsValue.With(mergeLabels(baseLabel, l)).Set(v)
 					case as_v2.ResourceMetricSourceType:
 						m := parseResourceStatus(metric.Resource)
 						v, l := parseCommonMetrics(m)
-						hpaCurrentResourceValue.With(mergeLabels(baseLabel, l)).Set(v)
+						hpaCurrentMetricsValue.With(mergeLabels(baseLabel, l)).Set(v)
 					case as_v2.ExternalMetricSourceType:
 						m := parseExternalStatus(metric.External)
 						v, l := parseCommonMetrics(m)
-						hpaCurrentExternalValue.With(mergeLabels(baseLabel, l)).Set(v)
+						hpaCurrentMetricsValue.With(mergeLabels(baseLabel, l)).Set(v)
 					default:
 						continue
 					}
