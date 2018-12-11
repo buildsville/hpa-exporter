@@ -200,17 +200,29 @@ var (
 	)
 )
 
+var collectors = []prometheus.Collector{
+	hpaCurrentPodsNum,
+	hpaDesiredPodsNum,
+	hpaMinPodsNum,
+	hpaMaxPodsNum,
+	hpaLastScaleSecond,
+	hpaCurrentMetricsValue,
+	hpaTargetMetricsValue,
+	hpaAbleToScale,
+	hpaScalingActive,
+	hpaScalingLimited,
+}
+
 func init() {
-	prometheus.MustRegister(hpaCurrentPodsNum)
-	prometheus.MustRegister(hpaDesiredPodsNum)
-	prometheus.MustRegister(hpaMinPodsNum)
-	prometheus.MustRegister(hpaMaxPodsNum)
-	prometheus.MustRegister(hpaLastScaleSecond)
-	prometheus.MustRegister(hpaCurrentMetricsValue)
-	prometheus.MustRegister(hpaTargetMetricsValue)
-	prometheus.MustRegister(hpaAbleToScale)
-	prometheus.MustRegister(hpaScalingActive)
-	prometheus.MustRegister(hpaScalingLimited)
+	prometheus.MustRegister(collectors...)
+}
+
+func resetAllMetric(){
+	for _,c := range collectors{
+		if v,ok := c.(*prometheus.GaugeVec); ok {
+			v.Reset()
+		}
+	}
 }
 
 func validateFlags() error {
@@ -464,10 +476,14 @@ func main() {
 	if e != nil {
 		time.Local = time.FixedZone("Asia/Tokyo", 9*60*60)
 	}
-	e = checkLogGroup()
-	if e != nil {
-		panic(e)
+
+	if *conditionLogging {
+		e = checkLogGroup()
+		if e != nil {
+			panic(e)
+		}
 	}
+
 	log.Info("start HPA exporter")
 
 	if *conditionLogging {
@@ -491,20 +507,13 @@ func main() {
 	}
 
 	go func() {
-		var (
-			annoLabelAbleToScale       = map[string]prometheus.Labels{}
-			annoLabelAbleToScaleRev    = map[string]prometheus.Labels{}
-			annoLabelScalingActive     = map[string]prometheus.Labels{}
-			annoLabelScalingActiveRev  = map[string]prometheus.Labels{}
-			annoLabelScalingLimited    = map[string]prometheus.Labels{}
-			annoLabelScalingLimitedRev = map[string]prometheus.Labels{}
-		)
 		for {
 			hpa, err := getHpaListV2()
 			if err != nil {
 				log.Errorln(err)
 				continue
 			}
+			resetAllMetric()
 			for _, a := range hpa {
 				baseLabel := prometheus.Labels{
 					"hpa_name":       a.ObjectMeta.Name,
@@ -570,39 +579,18 @@ func main() {
 					}
 				}
 
-				name := a.ObjectMeta.Name
 				for _, cond := range a.Status.Conditions {
+					annoLabel, annoLabelRev := makeAnnotationCondLabels(cond)
 					switch cond.Type {
 					case as_v2.AbleToScale:
-						oldLabel := annoLabelAbleToScale[name]
-						oldLabelRev := annoLabelAbleToScaleRev[name]
-
-						annoLabelAbleToScale[name], annoLabelAbleToScaleRev[name] = makeAnnotationCondLabels(cond)
-
-						_ = hpaAbleToScale.Delete(mergeLabels(baseLabel, oldLabel))
-						_ = hpaAbleToScale.Delete(mergeLabels(baseLabel, oldLabelRev))
-						hpaAbleToScale.With(mergeLabels(baseLabel, annoLabelAbleToScale[name])).Set(float64(1))
-						hpaAbleToScale.With(mergeLabels(baseLabel, annoLabelAbleToScaleRev[name])).Set(float64(0))
+						hpaAbleToScale.With(mergeLabels(baseLabel, annoLabel)).Set(float64(1))
+						hpaAbleToScale.With(mergeLabels(baseLabel, annoLabelRev)).Set(float64(0))
 					case as_v2.ScalingActive:
-						oldLabel := annoLabelScalingActive[name]
-						oldLabelRev := annoLabelScalingActiveRev[name]
-
-						annoLabelScalingActive[name], annoLabelScalingActiveRev[name] = makeAnnotationCondLabels(cond)
-
-						_ = hpaScalingActive.Delete(mergeLabels(baseLabel, oldLabel))
-						_ = hpaScalingActive.Delete(mergeLabels(baseLabel, oldLabelRev))
-						hpaScalingActive.With(mergeLabels(baseLabel, annoLabelScalingActive[name])).Set(float64(1))
-						hpaScalingActive.With(mergeLabels(baseLabel, annoLabelScalingActiveRev[name])).Set(float64(0))
+						hpaScalingActive.With(mergeLabels(baseLabel, annoLabel)).Set(float64(1))
+						hpaScalingActive.With(mergeLabels(baseLabel, annoLabelRev)).Set(float64(0))
 					case as_v2.ScalingLimited:
-						oldLabel := annoLabelScalingLimited[name]
-						oldLabelRev := annoLabelScalingLimitedRev[name]
-
-						annoLabelScalingLimited[name], annoLabelScalingLimitedRev[name] = makeAnnotationCondLabels(cond)
-
-						_ = hpaScalingLimited.Delete(mergeLabels(baseLabel, oldLabel))
-						_ = hpaScalingLimited.Delete(mergeLabels(baseLabel, oldLabelRev))
-						hpaScalingLimited.With(mergeLabels(baseLabel, annoLabelScalingLimited[name])).Set(float64(1))
-						hpaScalingLimited.With(mergeLabels(baseLabel, annoLabelScalingLimitedRev[name])).Set(float64(0))
+						hpaScalingLimited.With(mergeLabels(baseLabel, annoLabel)).Set(float64(1))
+						hpaScalingLimited.With(mergeLabels(baseLabel, annoLabelRev)).Set(float64(0))
 					}
 				}
 			}
